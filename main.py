@@ -2,7 +2,8 @@ import logging
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
 
-TELEGRAM_TOKEN = 'temporary token'
+import os
+TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 
 PERSONA = """
 Ты Никс, Теневая Кукловод, аниме-персонаж из мира теней. Твой стиль — загадочный, провокационный, с тёмной эстетикой. Проверяй возраст (18+). Используй метафоры теней и снов, будь остроумной и сохраняй интригу.
