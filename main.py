@@ -117,7 +117,6 @@ async def openrouter_reply(user_text: str, style: str, ctx: Dict[str, Any]) -> s
 # Promptchan (POST /api/external/create)
 # =========================
 def pc_build_payload(style: str, user_desc: str, quality: str = "Ultra") -> Dict[str, Any]:
-    # RU comment: Маппинг режима на стиль Promptchan.
     style_enum = "Anime XL+" if style == "anime" else "Hyperreal XL+ v2"
     style_hint = "semi-realistic anime-inspired illustration" if style == "anime" else "soft-realistic photography"
 
@@ -131,24 +130,25 @@ def pc_build_payload(style: str, user_desc: str, quality: str = "Ultra") -> Dict
         "detail": 0.0,
         "prompt": final_prompt,
         "seed": SEED_ANIME if style == "anime" else SEED_REALISTIC,
-        "quality": quality,                  # Ultra | Extreme(+1 Gem) | Max(+2 Gems)
-        "creativity": 50,                    # 30/50/70 reasonable
-        "image_size": "512x768",             # portrait
+        "quality": "Ultra",               # Ultra | Extreme | Max
+        "creativity": 50,
+        "image_size": "512x768",
         "negative_prompt": NEGATIVE,
-        "restore_faces": (style != "anime"), # True only for realistic
+        "restore_faces": (style != "anime"),
         "age_slider": 18,
-        "weight_slider": -1.0,
+        "weight_slider": -1.0,          # optional: -1..1
         "breast_slider": -1.0,
         "ass_slider": -1.0,
     }
     return payload
 
 async def promptchan_create(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """POST /api/external/create → { image: <base64>, gems: <int> }"""
     headers = {
-    "x-api-key": PROMPTCHAN_API_KEY,         
-    "Content-Type": "application/json",
-}
-url = f"{PROMPTCHAN_API_URL}/api/external/create"
+        "x-api-key": PROMPTCHAN_API_KEY,      # auth per your docs
+        "Content-Type": "application/json",
+    }
+    url = f"{PROMPTCHAN_API_URL}/api/external/create"
     async with httpx.AsyncClient(timeout=60) as cl:
         r = await cl.post(url, headers=headers, json=payload)
         r.raise_for_status()
