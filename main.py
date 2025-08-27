@@ -21,7 +21,7 @@ OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
 OPENROUTER_MODEL   = os.environ.get("OPENROUTER_MODEL", "gryphe/mythomax-l2-13b")
 
 PROMPTCHAN_API_KEY = os.environ["x-api-key"]
-PROMPTCHAN_API_URL = os.environ.get["PROMPTCHAN_API_URL"]
+PROMPTCHAN_API_URL = os.environ.get("PROMPTCHAN_API_URL", "https://prod.aicloudnetservices.com")
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s — %(message)s", level=logging.INFO)
 
