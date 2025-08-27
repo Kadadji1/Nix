@@ -262,14 +262,18 @@ def main():
     app.add_handler(CallbackQueryHandler(on_style_cb, pattern=r"^style:(realistic|anime)$"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    # make sure webhook is off before polling (prevents 409 conflicts)
-    asyncio.run(app.bot.delete_webhook(drop_pending_updates=True))
+    # Ensure there is a current event loop (Python 3.13)
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
 
-    # start polling; also drop any leftover updates
+    # Start polling; also clears webhook & pending updates
     app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
     main()
+
 
 
 
