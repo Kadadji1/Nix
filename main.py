@@ -1,26 +1,86 @@
-import os, re, logging
+# main.py
+import os, logging, asyncio, time, base64
+from io import BytesIO
 from typing import List, Dict, Any
-from telegram import Update
-from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
 
-# --- ENV ---
-TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
-OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
-
-# --- OpenAI ---
-from openai import AsyncOpenAI
-oclient = AsyncOpenAI(api_key=OPENAI_API_KEY)
-
-PERSONA = (
-    "Ты — Никс, Теневая Кукловод: загадочная, провокационная, с тёмной эстетикой. "
-    "Всегда отвечай по‑русски, коротко и атмосферно. Используй метафоры теней и снов. "
-    "В SFW избегай явной эротики."
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
+from telegram.ext import (
+    ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler,
+    CallbackQueryHandler, filters
 )
 
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+import httpx  # for Promptchan HTTP
+from openai import AsyncOpenAI as OpenAI  # OpenRouter via openai client
 
-YES_RE = re.compile(r"\b(да|ага|угу|есть|конечно|yes|yep|yeah)\b", re.I)
-NSFW_RE = re.compile(r"(согласие\s+на\s+nsfw|разрешаю\s+nsfw|хочу\s+nsfw)", re.I)
+# =========================
+# ENV (Render → Environment)
+# =========================
+TELEGRAM_TOKEN    = os.environ["TELEGRAM_TOKEN"]
+
+OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
+OPENROUTER_MODEL   = os.environ.get("OPENROUTER_MODEL", "gryphe/mythomax-l2-13b")
+
+PROMPTCHAN_API_KEY = os.environ["x-api-key"]
+PROMPTCHAN_API_URL = os.environ.get["PROMPTCHAN_API_URL"]
+
+logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s — %(message)s", level=logging.INFO)
+
+# ===================================
+# OpenRouter client (via openai lib)
+# ===================================
+or_client = OpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=OPENROUTER_API_KEY,
+)
+
+# =========================
+# Persona & style (LLM)
+# =========================
+# RU comment: Персона строго 18+, безопасные границы, ответы только на английском.
+PERSONA_BASE = (
+   "You are an 18+ virtual companion: a 18 уears old girl-next-door with a secret playful side. "
+    "Always lawful and consensual: no minors, no family roles, no non-consent, no illegal content. "
+    "Keep replies concise (2–5 sentences). Default to English unless the user speaks another language, then mirror it. "
+)
+
+STYLE_REALISTIC = (
+        "Active style: REALISTIC. Speak like a real neighbor in small talk: warm, down-to-earth, lightly teasing; "
+    "add small everyday details (hoodie, tea, soft lights). Avoid purple prose, Act like real person."
+)
+
+STYLE_ANIME = (
+        "Active style: ANIME_REALISTIC. Be shy and a bit bashful; add soft cinematic flair and gentle stage directions "
+    "(e.g., *glances shyly, cheeks warming*). Keep it grounded and readable."
+)
+
+def system_prompt(style: str) -> str:
+    return PERSONA_BASE + " " + (STYLE_ANIME if style == "anime" else STYLE_REALISTIC)
+
+# =========================
+# Stable appearance (images)
+# =========================
+# RU comment: Базовый облик, который всегда подмешивается к сцене.
+BASE_APPEARANCE = (
+    "extra slim European blonde woman, blonde short curly hair, "
+    "realistic green eyes, soft oval face with freckles, full lips, pure beauty "
+    "semi-realistic style, nipple piercings"
+
+)
+
+NEGATIVE = (
+    "child, underage, family role, violence, "
+    "bad anatomy, extra fingers, "
+    "multiple limbs, blurry, lowres, watermark, text"
+)
+
+# RU comment: Фиксированные сиды (по твоему запросу).
+SEED_REALISTIC = 3374304272
+SEED_ANIME     = 2166236711
+
+# =========================
+# In-memory state (replace with DB in prod)
+# =========================
+STATE: Dict[int, Dict[str, Any]] = {}  # user_id -> {"adult": None|True|False, "style": "realistic"|"anime", "dialog": [...]}
 
 def push_dialog(ctx: Dict[str, Any], role: str, content: str, max_turns: int = 16):
     buf: List[Dict[str, str]] = ctx.setdefault("dialog", [])
@@ -28,57 +88,185 @@ def push_dialog(ctx: Dict[str, Any], role: str, content: str, max_turns: int = 1
     if len(buf) > max_turns:
         del buf[0:len(buf)-max_turns]
 
-def build_messages(ctx: Dict[str, Any], user_text: str, mode: str) -> List[Dict[str, str]]:
-    msgs = [{"role": "system", "content": PERSONA + f"\nТекущий режим: {mode.upper()}."}]
+def build_messages(ctx: Dict[str, Any], user_text: str, style: str) -> List[Dict[str, str]]:
+    msgs = [{"role": "system", "content": system_prompt(style)}]
     msgs += ctx.get("dialog", [])[-10:]
     msgs.append({"role": "user", "content": user_text})
     return msgs
 
-async def nyx_ai_reply_ru(context: ContextTypes.DEFAULT_TYPE, user_text: str, mode: str) -> str:
-    messages = build_messages(context.user_data, user_text, mode)
-    resp = await oclient.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=messages,
-        temperature=0.75,
+def is_allowed(user_id: int) -> bool:
+    return STATE.get(user_id, {}).get("adult") is True
+
+# =========================
+# OpenRouter (LLM reply)
+# =========================
+async def openrouter_reply(user_text: str, style: str, ctx: Dict[str, Any]) -> str:
+    resp = await or_client.chat.completions.create(
+        model=OPENROUTER_MODEL,
+        messages=build_messages(ctx, user_text, style),
+        temperature=0.7,
         max_tokens=260,
+        extra_headers={
+            "HTTP-Referer": OPENROUTER_SITE,
+            "X-Title": OPENROUTER_TITLE,
+        },
     )
-    return resp.choices[0].message.content.strip()
+    return (resp.choices[0].message.content or "").strip()
 
+# =========================
+# Promptchan (POST /api/external/create)
+# =========================
+def pc_build_payload(style: str, user_desc: str, quality: str = "Ultra") -> Dict[str, Any]:
+    # RU comment: Маппинг режима на стиль Promptchan.
+    style_enum = "Anime XL+" if style == "anime" else "Hyperreal XL+ v2"
+    style_hint = "semi-realistic anime-inspired illustration" if style == "anime" else "soft-realistic photography"
+
+    final_prompt = f"{BASE_APPEARANCE}. {style_hint}. {user_desc}"
+
+    payload: Dict[str, Any] = {
+        "style": style_enum,
+        "poses": "Default",
+        "filter": "Default",
+        "emotion": "Default",
+        "detail": 0.0,
+        "prompt": final_prompt,
+        "seed": SEED_ANIME if style == "anime" else SEED_REALISTIC,
+        "quality": quality,                  # Ultra | Extreme(+1 Gem) | Max(+2 Gems)
+        "creativity": 50,                    # 30/50/70 reasonable
+        "image_size": "512x768",             # portrait
+        "negative_prompt": NEGATIVE,
+        "restore_faces": (style != "anime"), # True only for realistic
+        "age_slider": 18,
+        "weight_slider": -1.0,
+        "breast_slider": -1.0,
+        "ass_slider": -1.0,
+    }
+    return payload
+
+async def promptchan_create(payload: Dict[str, Any]) -> Dict[str, Any]:
+    headers = {
+    "x-api-key": PROMPTCHAN_API_KEY,         
+    "Content-Type": "application/json",
+}
+url = f"{PROMPTCHAN_API_URL}/api/external/create"
+    async with httpx.AsyncClient(timeout=60) as cl:
+        r = await cl.post(url, headers=headers, json=payload)
+        r.raise_for_status()
+        return r.json()
+
+def b64_to_inputfile(b64: str, filename: str = "preview.jpg") -> InputFile:
+    raw = base64.b64decode(b64)
+    bio = BytesIO(raw)
+    bio.seek(0)
+    return InputFile(bio, filename=filename)
+
+# =========================
+# Keyboards
+# =========================
+def kb_age_gate() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ I’m 18+", callback_data="age:yes"),
+         InlineKeyboardButton("❌ I’m under 18", callback_data="age:no")]
+    ])
+
+def kb_styles(current: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(("✅ Realistic" if current=="realistic" else "Realistic"), callback_data="style:realistic"),
+         InlineKeyboardButton(("✅ Anime" if current=="anime" else "Anime"), callback_data="style:anime")]
+    ])
+
+# =========================
+# Handlers
+# =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    ud = context.user_data
-    ud.setdefault("age_verified", False)
-    ud.setdefault("nsfw_consent", False)
-    ud.setdefault("dialog", [])
-    push_dialog(ud, "assistant", "Ты вошёл в мир теней. Я Никс.", 16)
-    await update.message.reply_text('Ты вошёл в мир теней. Я Никс. Тебе 18+? Ответь "да", чтобы продолжить.')
+    uid = update.effective_user.id
+    STATE[uid] = STATE.get(uid, {"adult": None, "style": "realistic", "dialog": []})
+    if STATE[uid]["adult"] is True:
+        await update.message.reply_text("Choose style:", reply_markup=kb_styles(STATE[uid]["style"]))
+    else:
+        await update.message.reply_text("Please confirm your age:", reply_markup=kb_age_gate())
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_message = update.message.text or ""
-    ud = context.user_data
+async def on_age_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query; await query.answer()
+    uid = query.from_user.id
+    STATE.setdefault(uid, {"adult": None, "style": "realistic", "dialog": []})
+    if query.data == "age:yes":
+        STATE[uid]["adult"] = True
+        await query.edit_message_text("Age confirmed. Choose my appearance:", reply_markup=kb_styles(STATE[uid]["style"]))
+    else:
+        STATE[uid]["adult"] = False
+        await query.edit_message_text("Access denied. Come back when you are 18+.")
 
-    if not ud.get('age_verified'):
-        if YES_RE.search(user_message):
-            ud['age_verified'] = True
-            push_dialog(ud, "user", "Да, мне 18+", 16)
-            await update.message.reply_text('Хорошо, смертный. Назови своё желание, и тени ответят. Для интимных снов скажи "согласие на NSFW".')
+async def on_style_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query; await query.answer()
+    uid = query.from_user.id
+    if not is_allowed(uid):
+        return
+    style = "realistic" if query.data.endswith("realistic") else "anime"
+    STATE[uid]["style"] = style
+    await query.edit_message_reply_markup(reply_markup=kb_styles(style))
+    await query.message.reply_text(
+        "Style set to **Realistic**" if style=="realistic" else "Style set to **Anime**",
+        parse_mode="Markdown"
+    )
+
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_allowed(uid):
+        return
+    user_text = update.message.text or ""
+    st = STATE[uid]
+    push_dialog(st, "user", user_text)
+    try:
+        reply = await openrouter_reply(user_text, st["style"], st)
+    except Exception as e:
+        logging.exception("OpenRouter error")
+        if st["style"] == "anime":
+            reply = ("*Glances shyly, cheeks warming.* I'm Chloe, your neighbour with a secret spark. "
+                     "Cozy or a touch daring?✨")
         else:
-            await update.message.reply_text('Назови свой возраст, смертный. 18+?')
+            reply = ("Hey—I'm Chloe. Let's keep it cozy and real. ")
+    push_dialog(st, "assistant", reply)
+    await update.message.reply_text(reply, parse_mode="Markdown")
+
+async def preview_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_allowed(uid):
         return
 
-    if NSFW_RE.search(user_message):
-        ud['nsfw_consent'] = True
-        push_dialog(ud, "user", "согласие на NSFW", 16)
-        await update.message.reply_text('Тени сгущаются... Готов к их танцу? 😈 Что ты желаешь?')
-        return
+    st = STATE[uid]
+    # RU comment: user_desc — только сцена/поза/свет/одежда. Внешность уже задана BASE_APPEARANCE.
+    desc = update.message.text.replace("/preview", "", 1).strip()
+    if not desc:
+        desc = "mirror selfie on bed, teasing smile,lace lingerie, warm cinematic lighting"
 
-    mode = "sfw"  # NSFW подключим позже, когда будет премиум
-    push_dialog(ud, "user", user_message, 16)
-    reply = await nyx_ai_reply_ru(context, user_message, mode)
-    push_dialog(ud, "assistant", reply, 16)
-    await update.message.reply_text(reply)
+    await update.message.reply_text("Let me show you something 👀")
+    try:
+        payload = pc_build_payload(st["style"], desc, quality="Ultra")
+        res = await promptchan_create(payload)
+        if "image" not in res:
+            raise RuntimeError(f"Promptchan: unexpected response: {res}")
+        photo = b64_to_inputfile(res["image"], filename="preview.jpg")
+        gems_info = f" · gems used: {res.get('gems')}" if "gems" in res else ""
+        seed_used = SEED_ANIME if st["style"] == "anime" else SEED_REALISTIC
+        await update.message.reply_photo(photo, caption=f"{st['style']} preview · seed {seed_used}{gems_info}")
+    except Exception as e:
+        logging.exception("Promptchan error")
+        await update.message.reply_text(f"Generation failed: {e}")
 
-if __name__ == '__main__':
+# =========================
+# Entry point
+# =========================
+def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler('start', start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("preview", preview_cmd))
+    app.add_handler(CallbackQueryHandler(on_age_cb, pattern=r"^age:(yes|no)$"))
+    app.add_handler(CallbackQueryHandler(on_style_cb, pattern=r"^style:(realistic|anime)$"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.run_polling()
+
+if __name__ == "__main__":
+    main()
+
+
