@@ -254,6 +254,9 @@ def main():
     app.add_handler(CallbackQueryHandler(on_age_cb, pattern=r"^age:(yes|no)$"))
     app.add_handler(CallbackQueryHandler(on_style_cb, pattern=r"^style:(realistic|anime)$"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+import asyncio
+asyncio.run(app.bot.delete_webhook(drop_pending_updates=True))
+app.run_polling(drop_pending_updates=True)
     app.run_polling()
 
 if __name__ == "__main__":
