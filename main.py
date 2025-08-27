@@ -101,7 +101,30 @@ def is_allowed(user_id: int) -> bool:
 # OpenRouter (LLM reply)
 # =========================
 async def openrouter_reply(user_text: str, style: str, ctx: Dict[str, Any]) -> str:
-    return (resp.choices[0].message.content or "").strip()
+    """LLM reply via OpenRouter (OpenAI client)"""
+    try:
+        completion = await or_client.chat.completions.create(
+            model=OPENROUTER_MODEL,
+            messages=build_messages(ctx, user_text, style),
+            temperature=0.7,
+            max_tokens=260,
+            # extra headers are optional
+            extra_headers={
+                "HTTP-Referer": os.environ.get("OPENROUTER_SITE", "https://your-app.example"),
+                "X-Title": os.environ.get("OPENROUTER_TITLE", "YourTelegramBot"),
+            },
+        )
+    except Exception:
+        logging.exception("OpenRouter request failed")
+        raise
+
+    # defensive extraction
+    try:
+        content = completion.choices[0].message.content
+    except Exception:
+        content = ""
+    return (content or "").strip()
+
 
 # =========================
 # Promptchan (POST /api/external/create)
