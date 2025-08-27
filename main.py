@@ -101,16 +101,6 @@ def is_allowed(user_id: int) -> bool:
 # OpenRouter (LLM reply)
 # =========================
 async def openrouter_reply(user_text: str, style: str, ctx: Dict[str, Any]) -> str:
-    resp = await or_client.chat.completions.create(
-        model=OPENROUTER_MODEL,
-        messages=build_messages(ctx, user_text, style),
-        temperature=0.7,
-        max_tokens=260,
-        extra_headers={
-            "HTTP-Referer": OPENROUTER_SITE,
-            "X-Title": OPENROUTER_TITLE,
-        },
-    )
     return (resp.choices[0].message.content or "").strip()
 
 # =========================
