@@ -247,19 +247,29 @@ async def preview_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =========================
 # Entry point
 # =========================
+# --- at the very bottom of main.py ---
+
+from telegram import Update
+import asyncio
+
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+
+    # handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("preview", preview_cmd))
     app.add_handler(CallbackQueryHandler(on_age_cb, pattern=r"^age:(yes|no)$"))
     app.add_handler(CallbackQueryHandler(on_style_cb, pattern=r"^style:(realistic|anime)$"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-import asyncio
-asyncio.run(app.bot.delete_webhook(drop_pending_updates=True))
-app.run_polling(drop_pending_updates=True)
-    app.run_polling()
+
+    # make sure webhook is off before polling (prevents 409 conflicts)
+    asyncio.run(app.bot.delete_webhook(drop_pending_updates=True))
+
+    # start polling; also drop any leftover updates
+    app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
     main()
+
 
 
