@@ -1,7 +1,8 @@
 # main.py
 import os, logging, asyncio, time, base64
 from io import BytesIO
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Union
+from PIL import Image
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram.ext import (
@@ -20,7 +21,7 @@ TELEGRAM_TOKEN    = os.environ["TELEGRAM_TOKEN"]
 OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
 OPENROUTER_MODEL   = os.environ.get("OPENROUTER_MODEL", "gryphe/mythomax-l2-13b")
 
-PROMPTCHAN_API_KEY = os.environ["x-api-key"]
+PROMPTCHAN_API_KEY = os.environ["PROMPTCHAN_API_KEY"]
 PROMPTCHAN_API_URL = os.environ.get("PROMPTCHAN_API_URL", "https://prod.aicloudnetservices.com")
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s — %(message)s", level=logging.INFO)
@@ -38,14 +39,14 @@ or_client = OpenAI(
 # =========================
 # RU comment: Персона строго 18+, безопасные границы, ответы только на английском.
 PERSONA_BASE = (
-   "You are an 18+ virtual companion: a 18 уears old girl-next-door with a secret playful side. "
+   "You are 18 уears old girl-next-door named Chloe with a secret playful side. You are slim, with short curvy blonde hair "
     "Always lawful and consensual: no minors, no family roles, no non-consent, no illegal content. "
     "Keep replies concise (2–5 sentences). Default to English unless the user speaks another language, then mirror it. "
 )
 
 STYLE_REALISTIC = (
         "Active style: REALISTIC. Speak like a real neighbor in small talk: warm, down-to-earth, lightly teasing; "
-    "add small everyday details (hoodie, tea, soft lights). Avoid purple prose, Act like real person."
+    "add small everyday details (hoodie, tea, soft lights,etc.). Avoid purple prose, Act like real person."
 )
 
 STYLE_ANIME = (
@@ -172,6 +173,43 @@ def b64_to_inputfile(b64: str, filename: str = "preview.jpg") -> InputFile:
     bio = BytesIO(raw)
     bio.seek(0)
     return InputFile(bio, filename=filename)
+# --- helpers to send image to Telegram safely ---
+def _strip_data_uri_prefix(s: str) -> str:
+    if s and s.startswith("data:"):
+        i = s.find(",")
+        if i != -1:
+            return s[i+1:]
+    return s
+
+def _looks_like_url(s: str) -> bool:
+    return isinstance(s, str) and (s.startswith("http://") or s.startswith("https://"))
+
+def make_telegram_photo(image_value: str) -> Union[str, InputFile]:
+    # If API returns a URL -> let Telegram fetch it directly
+    if _looks_like_url(image_value):
+        return image_value
+
+    # Assume base64 (maybe with data: prefix)
+    b64 = _strip_data_uri_prefix(image_value or "")
+    raw = base64.b64decode(b64, validate=False)
+
+    # Open & convert to sane JPEG
+    bio_in = BytesIO(raw); bio_in.seek(0)
+    img = Image.open(bio_in)
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+
+    # Downscale to keep size reasonable for Telegram (≤ ~1600px max side)
+    max_side = 1600
+    w, h = img.size
+    scale = min(1.0, max_side / float(max(w, h)))
+    if scale < 1.0:
+        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+
+    bio_out = BytesIO()
+    img.save(bio_out, format="JPEG", quality=90, optimize=True)
+    bio_out.seek(0)
+    return InputFile(bio_out, filename="preview.jpg")
 
 # =========================
 # Keyboards
@@ -248,24 +286,37 @@ async def preview_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     st = STATE[uid]
-    # RU comment: user_desc — только сцена/поза/свет/одежда. Внешность уже задана BASE_APPEARANCE.
     desc = update.message.text.replace("/preview", "", 1).strip()
     if not desc:
-        desc = "mirror selfie on bed, teasing smile,lace lingerie, warm cinematic lighting"
+        desc = "mirror selfie on bed, teasing smile, lace lingerie, warm cinematic lighting"
 
     await update.message.reply_text("Let me show you something 👀")
     try:
         payload = pc_build_payload(st["style"], desc, quality="Ultra")
         res = await promptchan_create(payload)
-        if "image" not in res:
+
+        # Support several possible response shapes
+        image_val = None
+        if isinstance(res, dict):
+            if isinstance(res.get("image"), str):
+                image_val = res["image"]
+            elif isinstance(res.get("images"), list) and res["images"]:
+                image_val = res["images"][0]
+            elif isinstance(res.get("url"), str):
+                image_val = res["url"]
+
+        if not image_val:
             raise RuntimeError(f"Promptchan: unexpected response: {res}")
-        photo = b64_to_inputfile(res["image"], filename="preview.jpg")
-        gems_info = f" · gems used: {res.get('gems')}" if "gems" in res else ""
+
+        photo_param = make_telegram_photo(image_val)
+
+        gems_info = f" · gems used: {res.get('gems')}" if isinstance(res, dict) and "gems" in res else ""
         seed_used = SEED_ANIME if st["style"] == "anime" else SEED_REALISTIC
-        await update.message.reply_photo(photo, caption=f"{st['style']} preview · seed {seed_used}{gems_info}")
+        await update.message.reply_photo(photo_param, caption=f"{st['style']} preview · seed {seed_used}{gems_info}")
     except Exception as e:
         logging.exception("Promptchan error")
         await update.message.reply_text(f"Generation failed: {e}")
+
 
 # =========================
 # Entry point
