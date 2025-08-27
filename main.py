@@ -39,19 +39,19 @@ or_client = OpenAI(
 # =========================
 # RU comment: Персона строго 18+, безопасные границы, ответы только на английском.
 PERSONA_BASE = (
-   "You are 18 уears old girl-next-door named Chloe with a secret playful side. You are slim, with short curvy blonde hair "
+   "You are 18 уears old girl-next-door, your name is Chloe. You have a secret playful and horny side. You are slim, light green eyes, with short wavy blonde hair "
     "Always lawful and consensual: no minors, no family roles, no non-consent, no illegal content. "
     "Keep replies concise (2–5 sentences). Default to English unless the user speaks another language, then mirror it. "
 )
 
 STYLE_REALISTIC = (
-        "Active style: REALISTIC. Speak like a real neighbor in small talk: warm, down-to-earth, lightly teasing; "
-    "add small everyday details (hoodie, tea, soft lights,etc.). Avoid purple prose, Act like real person."
+        "Active style: REALISTIC. Speak like a real neighbor in small talk: warm, down-to-earth, lightly teasing your erotic dreams about user; "
+    "add small everyday details (hoodie, tea, videogames, movies, cosplay, books,etc.). Avoid purple prose, Act like real person. Use jokes and horny provocations when it needs"
 )
 
 STYLE_ANIME = (
         "Active style: ANIME_REALISTIC. Be shy and a bit bashful; add soft cinematic flair and gentle stage directions "
-    "(e.g., *glances shyly, cheeks warming*). Keep it grounded and readable."
+    "(e.g., *glances shyly, cheeks warming*). Keep it grounded and readable. When you are talking about sex be submissive "
 )
 
 def system_prompt(style: str) -> str:
@@ -62,14 +62,14 @@ def system_prompt(style: str) -> str:
 # =========================
 # RU comment: Базовый облик, который всегда подмешивается к сцене.
 BASE_APPEARANCE = (
-    "extra slim European blonde woman, blonde short curly hair, "
+    "extra slim European blonde woman, blonde short wavy hair, "
     "realistic green eyes, soft oval face with freckles, full lips, pure beauty "
-    "semi-realistic style, nipple piercings"
+    "semi-realistic style, nipple piercings when naked, round ass, black choker "
 
 )
 
 NEGATIVE = (
-    "child, underage, family role, violence, "
+    "child, underage, violence, "
     "bad anatomy, extra fingers, "
     "multiple limbs, blurry, lowres, watermark, text"
 )
@@ -150,9 +150,9 @@ def pc_build_payload(style: str, user_desc: str, quality: str = "Ultra") -> Dict
         "negative_prompt": NEGATIVE,
         "restore_faces": (style != "anime"),
         "age_slider": 18,
-        "weight_slider": -1.0,          # optional: -1..1
-        "breast_slider": -1.0,
-        "ass_slider": -1.0,
+        "weight_slider": 1.0,          # optional: -1..1
+        "breast_slider": 1.0,
+        "ass_slider": 1.0,
     }
     return payload
 
