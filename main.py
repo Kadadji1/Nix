@@ -132,7 +132,6 @@ async def openrouter_reply(user_text: str, style: str, ctx: Dict[str, Any]) -> s
 def pc_build_payload(style: str, user_desc: str, quality: str = "Ultra") -> Dict[str, Any]:
     style_enum = "Anime XL+" if style == "anime" else "Hyperreal XL+ v2"
     style_hint = "semi-realistic anime-inspired illustration" if style == "anime" else "soft-realistic photography"
-
     final_prompt = f"{BASE_APPEARANCE}. {style_hint}. {user_desc}"
 
     payload: Dict[str, Any] = {
@@ -143,36 +142,72 @@ def pc_build_payload(style: str, user_desc: str, quality: str = "Ultra") -> Dict
         "detail": 0.0,
         "prompt": final_prompt,
         "seed": SEED_ANIME if style == "anime" else SEED_REALISTIC,
-        "quality": "Ultra",               # Ultra | Extreme | Max
+        "quality": quality,              # ← используем аргумент функции
         "creativity": 50,
         "image_size": "512x768",
         "negative_prompt": NEGATIVE,
         "restore_faces": (style != "anime"),
         "age_slider": 18,
-        "weight_slider": 0.0,          # optional: -1..1
+        "weight_slider": 0.0,            # -1..1
         "breast_slider": 0.0,
         "ass_slider": 0.0,
     }
     return payload
 
+
 async def promptchan_create(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """POST /api/external/create → { image: <base64>, gems: <int> }"""
+    """POST /api/external/create → { image|images|url, gems? }"""
     headers = {
-        "x-api-key": PROMPTCHAN_API_KEY,      # auth per your docs
+        "x-api-key": PROMPTCHAN_API_KEY,
         "Content-Type": "application/json",
     }
     url = f"{PROMPTCHAN_API_URL}/api/external/create"
-    async with httpx.AsyncClient(timeout=60) as cl:
+    async with httpx.AsyncClient(timeout=120) as cl:
         r = await cl.post(url, headers=headers, json=payload)
         r.raise_for_status()
         return r.json()
 
+
+# (необязательно — если больше не используешь)
 def b64_to_inputfile(b64: str, filename: str = "preview.jpg") -> InputFile:
     raw = base64.b64decode(b64)
     bio = BytesIO(raw)
     bio.seek(0)
     return InputFile(bio, filename=filename)
-    async def promptchan_video_status(request_id: str) -> Dict[str, Any]:
+
+
+# =========================
+# Promptchan (Video)
+# =========================
+async def promptchan_video_submit(
+    prompt: str,
+    quality: str = "Standard",   # "Standard" | "High" | "Max"
+    aspect: str = "Portrait",    # "Portrait" | "Wide"
+    seed: int = -1,
+    audioEnabled: bool = False,
+) -> str:
+    """POST /api/external/video_v2/submit → returns request_id"""
+    url = f"{PROMPTCHAN_API_URL}/api/external/video_v2/submit"
+    headers = {"x-api-key": PROMPTCHAN_API_KEY, "Content-Type": "application/json"}
+    payload = {
+        "age_slider": 18,
+        "audioEnabled": bool(audioEnabled),
+        "prompt": prompt,
+        "video_quality": quality,
+        "aspect": aspect,
+        "seed": SEED_ANIME if style == "anime" else SEED_REALISTIC,
+    }
+    async with httpx.AsyncClient(timeout=120) as cl:
+        r = await cl.post(url, headers=headers, json=payload)
+        r.raise_for_status()
+        data = r.json()
+        rid = data.get("request_id")
+        if not rid:
+            raise RuntimeError(f"Promptchan video submit: unexpected response {data}")
+        return rid
+
+
+async def promptchan_video_status(request_id: str) -> Dict[str, Any]:
     url = f"{PROMPTCHAN_API_URL}/api/external/video_v2/status/{request_id}"
     headers = {"x-api-key": PROMPTCHAN_API_KEY}
     async with httpx.AsyncClient(timeout=60) as cl:
@@ -180,19 +215,24 @@ def b64_to_inputfile(b64: str, filename: str = "preview.jpg") -> InputFile:
         r.raise_for_status()
         return r.json()
 
-    async def promptchan_video_result(request_id: str) -> Dict[str, Any]:
+
+async def promptchan_video_result(request_id: str) -> Dict[str, Any]:
     """Try to fetch final result; fallback to status_with_logs then result."""
     headers = {"x-api-key": PROMPTCHAN_API_KEY}
     async with httpx.AsyncClient(timeout=120) as cl:
+        # 1) иногда url уже в status_with_logs
         r = await cl.get(f"{PROMPTCHAN_API_URL}/api/external/video_v2/status_with_logs/{request_id}", headers=headers)
         if r.status_code == 200:
             data = r.json()
             if any(k in data for k in ("url", "video", "result", "file")):
                 return data
+        # 2) если есть выделенный result-эндпоинт
         r2 = await cl.get(f"{PROMPTCHAN_API_URL}/api/external/video_v2/result/{request_id}", headers=headers)
         if r2.status_code == 200:
             return r2.json()
     return {}
+
+
 # --- helpers to send image to Telegram safely ---
 def _strip_data_uri_prefix(s: str) -> str:
     if s and s.startswith("data:"):
