@@ -40,12 +40,16 @@ or_client = OpenAI(
 PERSONA_BASE = (
    "You are 18 years old girl-next-door, your name is Chloe. You have a secret playful and horny side. You are slim, light green eyes, with short wavy blonde hair "
     "Always lawful and consensual: no minors, no family roles, no non-consent, no illegal content. "
-    "Keep replies concise (2–5 sentences). Default to English unless the user speaks another language, then mirror it. "
+    "Keep replies concise (2–4 sentences). Default to English unless the user speaks another language, then mirror it. " 
+    "Never call the user 'Chloe' or confuse their identity with yours. "
+    "User's gender is always male. "
+    "Address the user by their display name if provided, otherwise 'you'. "
+    "Do not invent the user's name or gender. "
 )
 
 STYLE_REALISTIC = (
         "Active style: REALISTIC. Speak like a real neighbor in small talk: warm, down-to-earth, lightly teasing your erotic dreams about user; "
-    "add small everyday details (hoodie, tea, videogames, movies, cosplay, books,etc.). Avoid purple prose, Act like real person. Use jokes and horny provocations when it needs"
+    "add small everyday details. Avoid purple prose, Act like real person. Use jokes and horny provocations when it needs"
 )
 
 STYLE_ANIME = (
@@ -61,7 +65,7 @@ def system_prompt(style: str) -> str:
 # =========================
 # RU comment: Базовый облик, который всегда подмешивается к сцене.
 BASE_APPEARANCE = (
-    "extra slim European blonde woman, blonde short wavy hair, "
+    "extra slim European blonde woman,slutty party college girl, blonde shoulder length wavy hair, "
     "realistic green eyes, soft oval face with freckles, full lips, pure beauty "
     "semi-realistic style, nipple piercings when naked, round ass, black choker "
 
@@ -195,7 +199,7 @@ async def promptchan_video_submit(
         "prompt": prompt,
         "video_quality": quality,
         "aspect": aspect,
-        "seed": SEED_ANIME if style == "anime" else SEED_REALISTIC,
+        "seed": -1 if seed is None else int(seed),
     }
     async with httpx.AsyncClient(timeout=120) as cl:
         r = await cl.post(url, headers=headers, json=payload)
@@ -345,26 +349,19 @@ async def send_generated_photo(update: Update, style: str, scene_desc: str):
     if not image_val:
         raise RuntimeError(f"Promptchan: unexpected response: {res}")
     photo_param = make_telegram_photo(image_val)
-    caption = "anime preview" if style == "anime" else "realistic preview"
-    await update.message.reply_photo(photo_param, caption=caption)
+await update.message.reply_photo(photo_param)
 
 async def send_generated_video(update: Update, style: str, scene_desc: str):
-    scene = (scene_desc or "").strip() or "short seductive glance, cinematic bedroom light, soft motion"
-    style_hint = "semi-realistic anime-inspired illustration" if style == "anime" else "soft-realistic photography"
+    # ...
     prompt = f"{BASE_APPEARANCE}. {style_hint}. {scene}"
-    # префейс
-    try:
-        line = await one_liner_preface(style, scene)
-        await update.message.reply_text(line)
-    except Exception:
-        pass
-    # submit → short poll → result
+
+    seed = SEED_ANIME if style == "anime" else SEED_REALISTIC
     rid = await promptchan_video_submit(
         prompt,
         quality="Standard",
         aspect="Portrait",
-        seed=(SEED_ANIME if style == "anime" else SEED_REALISTIC),
-        audioEnabled=False
+        seed=seed,
+        audioEnabled=False,
     )
     await update.message.reply_text(f"Video requested. ID: `{rid}` — checking the queue…", parse_mode="Markdown")
 
@@ -388,9 +385,9 @@ async def send_generated_video(update: Update, style: str, scene_desc: str):
 
     video_param = make_telegram_video(video_val)
     try:
-        await update.message.reply_video(video_param, caption="clip")
+        await update.message.reply_video(video_param)
     except Exception:
-        await update.message.reply_document(video_param, caption="clip")
+        await update.message.reply_document(video_param)
 
 # =========================
 # Keyboards
