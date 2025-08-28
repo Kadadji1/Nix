@@ -334,10 +334,12 @@ async def send_generated_photo(update: Update, style: str, scene_desc: str):
         await update.message.reply_text(line)
     except Exception:
         pass
+
     # генерация
     payload = pc_build_payload(style, scene, quality="Ultra")
     res = await promptchan_create(payload)
-    # разбор ответа
+
+    # разбираем ответ Promptchan
     image_val = None
     if isinstance(res, dict):
         if isinstance(res.get("image"), str):
@@ -348,8 +350,11 @@ async def send_generated_photo(update: Update, style: str, scene_desc: str):
             image_val = res["url"]
     if not image_val:
         raise RuntimeError(f"Promptchan: unexpected response: {res}")
+
     photo_param = make_telegram_photo(image_val)
-await update.message.reply_photo(photo_param)
+    # без подписи под фото:
+    await update.message.reply_photo(photo=photo_param)
+
 
 async def send_generated_video(update: Update, style: str, scene_desc: str):
     # ...
@@ -385,9 +390,9 @@ async def send_generated_video(update: Update, style: str, scene_desc: str):
 
     video_param = make_telegram_video(video_val)
     try:
-        await update.message.reply_video(video_param)
+        await update.message.reply_video(video=video_param)
     except Exception:
-        await update.message.reply_document(video_param)
+        await update.message.reply_document(document=video_param)
 
 # =========================
 # Keyboards
