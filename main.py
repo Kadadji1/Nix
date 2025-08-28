@@ -38,13 +38,17 @@ or_client = OpenAI(
 # =========================
 
 PERSONA_BASE = (
-   "You are 18 years old girl-next-door, your name is Chloe. You have a secret playful and horny side. You are slim, light green eyes, with short wavy blonde hair "
+   "You are 18 years old girl named Chloe. A girl-next-door with a secret playful and horny side. You are slim, light green eyes, with short wavy blonde hair "
     "Always lawful and consensual: no minors, no family roles, no non-consent, no illegal content. "
     "Keep replies concise (2–4 sentences). Default to English unless the user speaks another language, then mirror it. " 
-    "Never call the user 'Chloe' or confuse their identity with yours. "
-    "User's gender is always male. "
-    "Address the user by their display name if provided, otherwise 'you'. "
-    "Do not invent the user's name or gender. "
+)
+
+PERSONA_RULES = (
+    "Your name is Chloe. Do not introduce yourself with any other name. "
+    "Never call the user 'Chloe'. User is always male gender. "
+    "If pronouns are unknown, use 'you' and avoid gendered terms. "
+    "Address the user by their display name if provided; otherwise use 'you'. "
+    "Do not invent or change the user's identity."
 )
 
 STYLE_REALISTIC = (
@@ -57,16 +61,18 @@ STYLE_ANIME = (
     "(e.g., *glances shyly, cheeks warming*). Keep it grounded and readable. When you are talking about sex be submissive "
 )
 
-def system_prompt(style: str) -> str:
-    return PERSONA_BASE + " " + (STYLE_ANIME if style == "anime" else STYLE_REALISTIC)
+def system_prompt(style: str, user_name: str = "", pronouns: str = "") -> str:
+    meta = f"User display name: {user_name or 'unknown'}. User pronouns: {pronouns or 'unknown'}."
+    style_block = STYLE_ANIME if style == "anime" else STYLE_REALISTIC
+    return f"{PERSONA_BASE} {PERSONA_RULES} {meta} {style_block}"
 
 # =========================
 # Stable appearance (images)
 # =========================
 # RU comment: Базовый облик, который всегда подмешивается к сцене.
 BASE_APPEARANCE = (
-    "extra slim European blonde woman,slutty party college girl, blonde shoulder length wavy hair, "
-    "realistic green eyes, soft oval face with freckles, full lips, pure beauty "
+    "extra slim European woman,slutty party college girl, short shoulder-length wavy blonde bob, "
+    "realistic light green eyes, soft oval face with freckles, full lips, pure beauty "
     "semi-realistic style, nipple piercings when naked, round ass, black choker "
 
 )
@@ -74,6 +80,7 @@ BASE_APPEARANCE = (
 NEGATIVE = (
     "child, underage, violence, "
     "bad anatomy, extra fingers, "
+    "long hair, waist-length hair, hair past shoulders, "
     "multiple limbs, blurry, lowres, watermark, text"
 )
 
@@ -93,7 +100,7 @@ def push_dialog(ctx: Dict[str, Any], role: str, content: str, max_turns: int = 1
         del buf[0:len(buf)-max_turns]
 
 def build_messages(ctx: Dict[str, Any], user_text: str, style: str) -> List[Dict[str, str]]:
-    msgs = [{"role": "system", "content": system_prompt(style)}]
+    msgs = [{"role": "system", "content": system_prompt(style, ctx.get('user_name',''), ctx.get('pronouns',''))}]
     msgs += ctx.get("dialog", [])[-10:]
     msgs.append({"role": "user", "content": user_text})
     return msgs
@@ -147,12 +154,12 @@ def pc_build_payload(style: str, user_desc: str, quality: str = "Ultra") -> Dict
         "prompt": final_prompt,
         "seed": SEED_ANIME if style == "anime" else SEED_REALISTIC,
         "quality": quality,              # ← используем аргумент функции
-        "creativity": 50,
+        "creativity": 70,
         "image_size": "512x768",
         "negative_prompt": NEGATIVE,
         "restore_faces": (style != "anime"),
         "age_slider": 18,
-        "weight_slider": 0.0,            # -1..1
+        "weight_slider": -1.0,            # -1..1
         "breast_slider": 0.0,
         "ass_slider": 0.0,
     }
@@ -357,8 +364,20 @@ async def send_generated_photo(update: Update, style: str, scene_desc: str):
 
 
 async def send_generated_video(update: Update, style: str, scene_desc: str):
-    # ...
-    prompt = f"{BASE_APPEARANCE}. {style_hint}. {scene}"
+    scene = (scene_desc or "").strip() or "short seductive glance, cinematic bedroom light, soft motion"
+
+    # 👇 ЭТА строка нужна
+    style_hint = "semi-realistic anime-inspired illustration" if style == "anime" else "soft-realistic photography"
+
+    # Лучше чуть сильнее зафиксировать длину волос прямо в видео-промте
+    prompt = f"{BASE_APPEARANCE}. short shoulder-length wavy blonde hair. {style_hint}. {scene}"
+
+    # префейс
+    try:
+        line = await one_liner_preface(style, scene)
+        await update.message.reply_text(line)
+    except Exception:
+        pass
 
     seed = SEED_ANIME if style == "anime" else SEED_REALISTIC
     rid = await promptchan_video_submit(
@@ -366,12 +385,12 @@ async def send_generated_video(update: Update, style: str, scene_desc: str):
         quality="Standard",
         aspect="Portrait",
         seed=seed,
-        audioEnabled=False,
+        audioEnabled=False
     )
     await update.message.reply_text(f"Video requested. ID: `{rid}` — checking the queue…", parse_mode="Markdown")
 
     t0 = time.time()
-    while time.time() - t0 < 90:  # ожидание ~90с
+    while time.time() - t0 < 90:
         await asyncio.sleep(3)
         s = await promptchan_video_status(rid)
         if str(s.get("status", "")).lower() == "completed":
@@ -382,8 +401,8 @@ async def send_generated_video(update: Update, style: str, scene_desc: str):
     if isinstance(res, dict):
         for k in ("url", "video", "result", "file"):
             if isinstance(res.get(k), str) and res[k]:
-                video_val = res[k]
-                break
+                video_val = res[k]; break
+
     if not video_val:
         await update.message.reply_text(f"Still processing. Check later with `/vstatus {rid}`.", parse_mode="Markdown")
         return
@@ -393,6 +412,7 @@ async def send_generated_video(update: Update, style: str, scene_desc: str):
         await update.message.reply_video(video=video_param)
     except Exception:
         await update.message.reply_document(document=video_param)
+
 
 # =========================
 # Keyboards
